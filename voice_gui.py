@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Claude Türkçe Ses — GUI skill for Claude Code.
-Record button → records → Gönder button sends transcript to Claude (exits).
-× just closes without sending.
+Canvas-based glow (no image clipping), PIL for AA circle only.
+Gönder → sends transcript + re-opens window in 3s.
 """
 import sys
 import io
@@ -11,7 +11,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 import threading
 import tkinter as tk
-from PIL import Image, ImageDraw, ImageFilter, ImageTk
+from PIL import Image, ImageDraw, ImageTk
 import numpy as np
 import sounddevice as sd
 import whisper
@@ -24,6 +24,7 @@ MODEL_SIZE        = "medium"
 
 BORDER    = "#1f1f1f"
 BG        = "#0d0d0d"
+_BG_RGB   = (13, 13, 13)
 TOPBAR    = "#111111"
 SEP       = "#1c1c1c"
 WAVE_DIM  = "#1a1a1a"
@@ -38,56 +39,47 @@ BTN_REC   = (0xff, 0x33, 0x22)
 BTN_BUSY  = (0x28, 0x28, 0x28)
 BTN_GREEN = (0x22, 0xaa, 0x55)
 
-CVS_W, CVS_H           = 300, 158
-BTN_CX, BTN_CY, BTN_R = 150, 79, 40
-IMG_PAD                = 38   # large enough for blur to fully spread
+CVS_W, CVS_H           = 300, 150
+BTN_CX, BTN_CY, BTN_R = 150, 74, 40
+GLOW_STEPS             = 20
+GLOW_EXTENT            = 32   # max glow spread in pixels beyond button radius
 
 
-_BG_RGB = (13, 13, 13)   # must match BG = "#0d0d0d"
-
-def _make_circle(radius, color_rgb, glow_alpha=0):
+def _make_btn_img(radius, color_rgb):
+    """Anti-aliased circle, transparent background. PIL for smooth edges only."""
     scale = 4
-    pad   = IMG_PAD
+    pad   = 3
     sz    = (radius + pad) * 2 * scale
     c     = sz // 2
-
-    # Build RGBA layer
-    img  = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
-    if glow_alpha > 0:
-        glow = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
-        gd   = ImageDraw.Draw(glow)
-        gr   = (radius + pad * 2 // 3) * scale
-        gd.ellipse([c-gr, c-gr, c+gr, c+gr], fill=(*color_rgb, glow_alpha))
-        glow = glow.filter(ImageFilter.GaussianBlur(radius * scale // 2))
-        img  = Image.alpha_composite(img, glow)
-
-    draw = ImageDraw.Draw(img)
-    rs   = radius * scale
-    draw.ellipse([c-rs, c-rs, c+rs, c+rs], fill=(*color_rgb, 255))
-
-    # Downscale with LANCZOS
-    out   = sz // scale
-    img   = img.resize((out, out), Image.LANCZOS)
-
-    # Bake onto solid canvas background so tkinter shows glow correctly
-    # (tkinter PhotoImage doesn't support true RGBA compositing on canvas)
-    flat  = Image.new("RGB", (out, out), _BG_RGB)
-    flat.paste(img, mask=img.split()[3])
+    img   = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
+    ImageDraw.Draw(img).ellipse([c - radius*scale, c - radius*scale,
+                                  c + radius*scale, c + radius*scale],
+                                 fill=(*color_rgb, 255))
+    out = sz // scale
+    # Bake onto bg so tkinter renders edges correctly
+    flat = Image.new("RGB", (out, out), _BG_RGB)
+    rsz  = img.resize((out, out), Image.LANCZOS)
+    flat.paste(rsz, mask=rsz.split()[3])
     return ImageTk.PhotoImage(flat)
 
 
 def _lerp(a, b, t):
+    t = max(0.0, min(1.0, t))
     return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
+
+
+def _rgb_hex(c):
+    return f"#{c[0]:02x}{c[1]:02x}{c[2]:02x}"
 
 
 class VoiceGUI:
     def __init__(self):
-        self.model      = None
-        self.recording  = False
-        self.frames     = []
-        self.pulse_step = 0
-        self.rms_buf    = [0.0] * 28
-        self._img_ref   = None
+        self.model       = None
+        self.recording   = False
+        self.frames      = []
+        self.pulse_step  = 0
+        self.rms_buf     = [0.0] * 28
+        self._img_ref    = None
         self._transcript = None
 
         # ── root ──────────────────────────────────────────────────────────
@@ -97,7 +89,7 @@ class VoiceGUI:
         self.root.attributes("-topmost", True)
         self.root.resizable(False, False)
 
-        W, H = 300, 260
+        W, H = 300, 248
         self.root.update_idletasks()
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
@@ -133,16 +125,26 @@ class VoiceGUI:
 
         tk.Frame(inner, bg=SEP, height=1).pack(fill="x")
 
-        # ── record button canvas ───────────────────────────────────────────
+        # ── button canvas ─────────────────────────────────────────────────
         self.cvs = tk.Canvas(inner, width=CVS_W, height=CVS_H,
                              bg=BG, highlightthickness=0)
         self.cvs.pack()
 
-        img = _make_circle(BTN_R, BTN_IDLE)
+        # Glow ovals — created FIRST so they sit below the button
+        self._glow_ovals = [
+            self.cvs.create_oval(0, 0, 0, 0, fill=BG, outline="")
+            for _ in range(GLOW_STEPS)
+        ]
+
+        # Button image (PIL anti-aliased circle, on top of glow)
+        img = _make_btn_img(BTN_R, BTN_IDLE)
         self._img_ref = img
         self.btn_img  = self.cvs.create_image(BTN_CX, BTN_CY, image=img)
-        self.icon     = self.cvs.create_text(BTN_CX, BTN_CY, text="🎙",
-                                              font=("Segoe UI Emoji", 17), fill="white")
+
+        # Mic icon (topmost)
+        self.icon = self.cvs.create_text(BTN_CX, BTN_CY, text="🎙",
+                                          font=("Segoe UI Emoji", 17), fill="white")
+
         for item in (self.btn_img, self.icon):
             self.cvs.tag_bind(item, "<Button-1>", self._on_click)
             self.cvs.tag_bind(item, "<Enter>",    self._on_hover)
@@ -164,7 +166,7 @@ class VoiceGUI:
 
         tk.Frame(inner, bg=SEP, height=1).pack(fill="x")
 
-        # ── bottom bar: status + gönder button ────────────────────────────
+        # ── bottom bar ────────────────────────────────────────────────────
         bot = tk.Frame(inner, bg="#0a0a0a", height=36)
         bot.pack(fill="x")
         bot.pack_propagate(False)
@@ -175,16 +177,10 @@ class VoiceGUI:
                                    font=("Segoe UI", 8))
         self.status_lbl.pack(side="left", padx=(10, 0))
 
-        # Gönder button — right side, hidden until transcript ready
-        self._send_frame = tk.Frame(bot, bg="#0a0a0a")
-        self._send_frame.pack(side="right", padx=6)
-
-        self._send_btn = tk.Label(
-            self._send_frame, text="gönder →", bg="#0a0a0a",
-            fg="#1a1a1a", font=("Segoe UI", 8, "bold"), cursor="hand2",
-            padx=8, pady=4
-        )
-        self._send_btn.pack()
+        self._send_btn = tk.Label(bot, text="gönder →", bg="#0a0a0a",
+                                   fg="#1a1a1a", font=("Segoe UI", 8, "bold"),
+                                   cursor="hand2", padx=8, pady=4)
+        self._send_btn.pack(side="right", padx=6)
         self._send_btn.bind("<Button-1>", self._send)
         self._send_active = False
 
@@ -203,9 +199,17 @@ class VoiceGUI:
         if not self._send_active or not self._transcript:
             return
         print(self._transcript, flush=True)
+        script = sys.argv[0]
+        def _relaunch():
+            import subprocess
+            subprocess.Popen(
+                [sys.executable, script],
+                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            )
+        threading.Timer(3.0, _relaunch).start()
         self.root.destroy()
 
-    # ── enable/disable gönder ──────────────────────────────────────────────
+    # ── gönder enable/disable ──────────────────────────────────────────────
     def _set_send(self, active):
         self._send_active = active
         if active:
@@ -217,12 +221,29 @@ class VoiceGUI:
             self._send_btn.unbind("<Enter>")
             self._send_btn.unbind("<Leave>")
 
-    # ── button image ───────────────────────────────────────────────────────
+    # ── button + glow ──────────────────────────────────────────────────────
     def _set_btn(self, color_rgb, radius=None, glow=0):
-        r   = radius if radius is not None else BTN_R
-        img = _make_circle(r, color_rgb, glow_alpha=glow)
+        r  = radius if radius is not None else BTN_R
+        cx, cy = BTN_CX, BTN_CY
+
+        # Update PIL circle image
+        img = _make_btn_img(r, color_rgb)
         self._img_ref = img
         self.cvs.itemconfig(self.btn_img, image=img)
+
+        # Update canvas glow ovals
+        for i, oval in enumerate(self._glow_ovals):
+            if glow == 0:
+                self.cvs.coords(oval, 0, 0, 0, 0)
+                continue
+            # i=0 outermost, i=GLOW_STEPS-1 innermost
+            t = i / (GLOW_STEPS - 1)        # 0→1 outer→inner
+            oval_r = r + int(GLOW_EXTENT * (1.0 - t))
+            # quadratic falloff: dim at outer, bright at inner
+            intensity = (glow / 255.0) * (t ** 1.5)
+            c = _lerp(_BG_RGB, color_rgb, intensity)
+            self.cvs.coords(oval, cx-oval_r, cy-oval_r, cx+oval_r, cy+oval_r)
+            self.cvs.itemconfig(oval, fill=_rgb_hex(c))
 
     # ── model ──────────────────────────────────────────────────────────────
     def _load_model(self):
@@ -262,7 +283,7 @@ class VoiceGUI:
         if not self.recording:
             return
         osc  = 0.5 + 0.5 * math.sin(self.pulse_step * 0.4)
-        self._set_btn(BTN_REC, radius=int(BTN_R + osc * 5), glow=int(60 + osc * 80))
+        self._set_btn(BTN_REC, radius=int(BTN_R + osc * 5), glow=int(80 + osc * 120))
         self._draw_wave()
         self.pulse_step += 1
         self.root.after(65, self._pulse)
@@ -279,12 +300,12 @@ class VoiceGUI:
     # ── record ─────────────────────────────────────────────────────────────
     def _record(self):
         chunk = int(SAMPLE_RATE * 0.1)
-        sil_needed = int(SILENCE_DURATION / 0.1)
-        max_chunks = int(MAX_DURATION / 0.1)
+        sil_n = int(SILENCE_DURATION / 0.1)
+        max_c = int(MAX_DURATION / 0.1)
         silent = 0; started = False
         try:
             with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32") as s:
-                for _ in range(max_chunks):
+                for _ in range(max_c):
                     if not self.recording: break
                     try:
                         data, _ = s.read(chunk)
@@ -297,7 +318,7 @@ class VoiceGUI:
                         started = True; silent = 0
                     elif started:
                         silent += 1
-                        if silent >= sil_needed: break
+                        if silent >= sil_n: break
         except Exception:
             pass
         self.recording = False
@@ -308,13 +329,12 @@ class VoiceGUI:
         STEPS = 10
         if step >= STEPS:
             self._transcribe(); return
-        t = step / (STEPS - 1)
+        t    = step / (STEPS - 1)
         ease = t * t * (3 - 2 * t)
         self._set_btn(_lerp(BTN_REC, BTN_BUSY, ease),
-                      radius=max(int(BTN_R + 4 - ease * 8), BTN_R - 4))
+                      radius=max(int(BTN_R + 4 - ease * 8), BTN_R - 4), glow=0)
         for item in self._bars: self.wvs.itemconfig(item, fill=WAVE_DIM)
-        self.status_var.set("işleniyor…")
-        self.status_lbl.config(fg=TEXT_DIM)
+        self.status_var.set("işleniyor…"); self.status_lbl.config(fg=TEXT_DIM)
         self.root.after(45, lambda: self._stop_anim(step + 1))
 
     # ── transcribe ─────────────────────────────────────────────────────────
@@ -343,7 +363,7 @@ class VoiceGUI:
         if self._transcript:
             self._success_flash()
             self._set_send(True)
-            self.status_var.set("kopyalandi  ·  gönder →")
+            self.status_var.set("kopyalandi")
             self.status_lbl.config(fg="#55aa66")
         else:
             self._set_btn(BTN_IDLE)
@@ -355,7 +375,7 @@ class VoiceGUI:
         HALF = 5
         if step >= HALF * 2:
             self._set_btn(BTN_IDLE); return
-        t = (step % HALF) / (HALF - 1)
+        t     = (step % HALF) / (HALF - 1)
         color = _lerp(BTN_IDLE, BTN_GREEN, t) if step < HALF else _lerp(BTN_GREEN, BTN_IDLE, t)
         self._set_btn(color)
         self.root.after(90, lambda: self._success_flash(step + 1))

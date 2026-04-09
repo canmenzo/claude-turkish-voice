@@ -41,17 +41,11 @@ if old.exists():
 (skill_dir / "voicetr.md").write_text(voicetr_content, encoding="utf-8")
 print(f"OK /voicetr skill installed")
 
-# ── voicetr.bat in ~/.claude (short, reliable path) ───────────────────────
-claude_dir  = pathlib.Path(os.environ["USERPROFILE"]) / ".claude"
-voicetr_bat = claude_dir / "voicetr.bat"
-bat = f'@echo off\n"{python_exe}" "{repo / "voice_gui.py"}"\n'
-voicetr_bat.write_text(bat, encoding="utf-8")
-print(f"OK voicetr.bat installed: {voicetr_bat}")
-
-# ── Remove startup hotkey shortcut if present ─────────────────────────────
-startup_lnk = (pathlib.Path(os.environ["APPDATA"])
-               / "Microsoft" / "Windows" / "Start Menu"
-               / "Programs" / "Startup" / "voicetr-hotkey.lnk")
-if startup_lnk.exists():
-    startup_lnk.unlink()
-    print("OK removed hotkey startup entry")
+# ── Remove leftover hotkey files if present ───────────────────────────────
+for leftover in [
+    pathlib.Path(os.environ["APPDATA"]) / "Microsoft" / "Windows"
+        / "Start Menu" / "Programs" / "Startup" / "voicetr-hotkey.lnk",
+    pathlib.Path(os.environ["USERPROFILE"]) / ".claude" / "voicetr.bat",
+]:
+    if leftover.exists():
+        leftover.unlink()
