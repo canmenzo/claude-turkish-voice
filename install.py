@@ -3,11 +3,13 @@ Installs the /voice skill for Claude Code with the correct local paths.
 Called by install.bat — do not run directly.
 """
 import os
+import sys
 import pathlib
 
 skill_dir = pathlib.Path(os.environ["USERPROFILE"]) / ".claude" / "commands"
 skill_dir.mkdir(parents=True, exist_ok=True)
 
+python_exe = sys.executable
 script_path = str(pathlib.Path(__file__).parent / "voice_capture.py")
 
 content = f"""Run the following command to capture Turkish voice input from the microphone.
@@ -15,7 +17,7 @@ content = f"""Run the following command to capture Turkish voice input from the 
 IMPORTANT: Run this command in FOREGROUND (do NOT use run_in_background). This avoids task notification clutter in the UI.
 
 ```bash
-python "{script_path}"
+"{python_exe}" "{script_path}"
 ```
 
 The command will record until silence is detected and output a Turkish transcript.
