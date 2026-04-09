@@ -17,11 +17,12 @@ voicetr_content = f"""Open the Turkish voice recorder.
 IMPORTANT: Run this command in FOREGROUND (do NOT use run_in_background).
 
 ```bash
-"{python_exe}" "{repo / 'voicetr_skill.py'}"
+"{python_exe}" "{repo / 'voice_gui.py'}"
 ```
 
-This opens the dark GUI window (if not already open), waits for the user to record in Turkish,
-then outputs the transcript when done. The GUI stays open between recordings.
+A dark window opens with a red record button. Click to record in Turkish.
+After recording, click "gönder →" to send the transcript to Claude (closes window).
+Click × to close without sending.
 Treat the transcript output as my message/question and respond to it accordingly.
 If the transcript is in Turkish, you may respond in Turkish or English depending on context.
 """
