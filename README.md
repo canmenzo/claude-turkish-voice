@@ -32,7 +32,7 @@ install.bat
 
 ### Kullanım
 
-Claude Code içinde `/voicetr` yaz → kaydet → **gönder →**
+Claude Code içinde `/voicetr` yaz → kaydet → **gönder**
 
 ---
 
@@ -64,7 +64,7 @@ First run downloads the Whisper `medium` model (~1.5GB).
 
 ### Usage
 
-Type `/voicetr` in Claude Code → record → click **gönder →**
+Type `/voicetr` in Claude Code → record → click **send (gönder)**
 
 ### Files
 
