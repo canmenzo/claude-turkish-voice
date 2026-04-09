@@ -1,6 +1,6 @@
 # 🎙️ Claude Turkish Voice | Claude Türkçe Ses
 
-> 🇹🇷 [Türkçe](#türkçe) &nbsp;|&nbsp; 🇬🇧 [English](#english)
+🇹🇷 [Türkçe](#türkçe) &nbsp;|&nbsp; 🇬🇧 [English](#english)
 
 ---
 
