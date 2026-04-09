@@ -1,4 +1,4 @@
-# 🎙️ Claude Turkish Voice
+# 🎙️ Claude Turkish Voice | Claude Türkçe Ses
 
 > 🇹🇷 [Türkçe](#türkçe) &nbsp;|&nbsp; 🇬🇧 [English](#english)
 
@@ -6,13 +6,14 @@
 
 ## Türkçe
 
-Claude Code için Türkçe sesli giriş — OpenAI Whisper kullanır. `/voice` yaz, Türkçe konuş, sözlerin otomatik olarak mesaja dönüşür.
+Claude Code için Türkçe sesli giriş. `/voicetr` yaz, butona tıkla, konuş — sözlerin otomatik olarak Claude'a iletilir.
 
 ### Nasıl çalışır
 
-- 🎤 Sessizlik algılanana kadar mikrofondan kaydeder
-- 🧠 Whisper'ı yerel çalıştırır (API anahtarı gerekmez)
-- ⚡ Transkripti doğrudan Claude Code'a mesaj olarak iletir
+- 🎤 Butona tıkla, Türkçe konuş
+- 🔇 Sessizlik algılanınca otomatik durur
+- 🧠 Whisper ile yerel transkripsiyon (API anahtarı gerekmez)
+- ⚡ Transcript doğrudan Claude Code prompt'una gelir
 
 ### Gereksinimler
 
@@ -25,28 +26,29 @@ Claude Code için Türkçe sesli giriş — OpenAI Whisper kullanır. `/voice` y
 install.bat
 ```
 
-Bağımlılıkları yükler ve `/voice` skill'ini Claude Code'a kaydeder.
 İlk çalıştırmada Whisper `medium` modeli indirilir (~1.5GB).
 
 ### Kullanım
 
-Claude Code'da `/voice` yazıp Enter'a bas. Türkçe konuş. Claude ne dediğini anlayıp cevap verir.
+- **`/voicetr`** — küçük koyu pencere açılır, kırmızı butona tıkla, konuş, kapanır
+- **`/voice`** — terminal tabanlı fallback versiyon
 
-### Doğruluk
+### Doğruluk ayarı
 
-`medium` model kullanır. Daha iyi doğruluk için `voice_capture.py` içinde `MODEL_SIZE = "medium"` → `"large"` yap (daha yavaş).
+`voice_capture.py` ve `voice_gui.py` içinde `MODEL_SIZE = "medium"` → `"large"` yaparak doğruluğu artırabilirsin (daha yavaş).
 
 ---
 
 ## English
 
-Turkish voice-to-text for Claude Code using OpenAI Whisper. Type `/voice` in Claude Code, speak Turkish, and your words become the prompt — automatically.
+Turkish voice input for Claude Code. Type `/voicetr`, click the button, speak — your words go straight into Claude.
 
 ### How it works
 
-- 🎤 Records from your mic until silence is detected
-- 🧠 Runs OpenAI Whisper locally (no API key needed)
-- ⚡ Outputs Turkish transcript directly into Claude Code as your message
+- 🎤 Click the button, speak Turkish
+- 🔇 Auto-stops on silence detection
+- 🧠 Local Whisper transcription (no API key needed)
+- ⚡ Transcript feeds directly into Claude Code as your prompt
 
 ### Requirements
 
@@ -59,29 +61,18 @@ Turkish voice-to-text for Claude Code using OpenAI Whisper. Type `/voice` in Cla
 install.bat
 ```
 
-This installs Python dependencies and registers the `/voice` skill in Claude Code.
-
 First run downloads the Whisper `medium` model (~1.5GB).
 
 ### Usage
 
-Type `/voice` and press Enter in Claude Code. Speak in Turkish. Claude will respond to what you said.
-
-### Standalone (clipboard)
-```
-python turkish_whisper.py
-```
-Press Enter to start, Enter again to stop. Transcript is copied to clipboard.
+- **`/voicetr`** — opens a small dark GUI window with animated record button
+- **`/voice`** — terminal-based fallback
 
 ### Files
 
 | File | Description |
 |------|-------------|
-| `voice_capture.py` | Claude Code integration — records until silence, prints transcript |
-| `turkish_whisper.py` | Standalone interactive version with clipboard support |
-| `.claude/commands/voice.md` | Claude Code skill definition |
+| `voice_gui.py` | GUI skill — dark window, anti-aliased button, waveform |
+| `voice_capture.py` | Terminal fallback — records until silence, prints transcript |
+| `install.py` | Generates skill files with correct local paths |
 | `install.bat` | One-click setup |
-
-### Accuracy
-
-Uses Whisper `medium` model. Change `MODEL_SIZE = "medium"` to `"large"` in either script for better accuracy (slower).
