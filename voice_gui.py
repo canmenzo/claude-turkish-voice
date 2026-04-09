@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
 Turkish voice GUI for Claude Code /voicetr skill.
-Dark window with custom title bar, red record button, waveform feedback.
+Anti-aliased button via PIL, waveform, stop animation.
 Outputs transcript to stdout on completion.
 """
 import sys
 import io
+import math
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 import threading
 import tkinter as tk
+from PIL import Image, ImageDraw, ImageFilter, ImageTk
 import numpy as np
 import sounddevice as sd
 import whisper
@@ -20,35 +22,71 @@ SILENCE_DURATION  = 2.0
 MAX_DURATION      = 60
 MODEL_SIZE        = "medium"
 
-# Palette
-BORDER    = "#1f1f1f"   # root bg → acts as 1-px border
-BG        = "#0d0d0d"   # main bg
-TOPBAR    = "#111111"   # title bar bg
-SEP       = "#1c1c1c"   # separator line
-BTN_IDLE  = "#b03020"
-BTN_HOVER = "#e03020"
-BTN_REC   = "#ff3322"
-BTN_BUSY  = "#2a2a2a"
-WAVE_DIM  = "#1e1e1e"
-WAVE_LIT  = "#cc2200"
-TEXT_DIM  = "#444444"
-TEXT_MID  = "#888888"
-TEXT_HI   = "#ff4433"
-WHITE     = "#ffffff"
+BORDER   = "#1f1f1f"
+BG       = "#0d0d0d"
+TOPBAR   = "#111111"
+SEP      = "#1c1c1c"
+WAVE_DIM = "#1a1a1a"
+WAVE_LIT = "#cc2200"
+TEXT_DIM = "#3a3a3a"
+TEXT_MID = "#777777"
+TEXT_HI  = "#ff4433"
+
+BTN_IDLE  = (0xb0, 0x30, 0x20)
+BTN_HOVER = (0xe0, 0x40, 0x28)
+BTN_REC   = (0xff, 0x33, 0x22)
+BTN_BUSY  = (0x28, 0x28, 0x28)
+
+# Canvas dimensions
+CVS_W, CVS_H = 300, 140
+BTN_CX, BTN_CY, BTN_R = 150, 68, 40
+IMG_PAD = 20   # extra space around circle for glow
+
+
+def _make_circle(radius, color_rgb, glow_alpha=0, bg=(13, 13, 13)):
+    """Return an anti-aliased PhotoImage of a circle with optional glow."""
+    scale = 4
+    pad   = IMG_PAD
+    sz    = (radius + pad) * 2 * scale
+    c     = sz // 2
+
+    img = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
+
+    if glow_alpha > 0:
+        glow = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
+        gd   = ImageDraw.Draw(glow)
+        gr   = (radius + pad // 2) * scale
+        gd.ellipse([c-gr, c-gr, c+gr, c+gr],
+                   fill=(*color_rgb, glow_alpha))
+        glow = glow.filter(ImageFilter.GaussianBlur(radius * scale // 3))
+        img  = Image.alpha_composite(img, glow)
+
+    draw = ImageDraw.Draw(img)
+    rs = radius * scale
+    draw.ellipse([c-rs, c-rs, c+rs, c+rs], fill=(*color_rgb, 255))
+
+    out_sz = sz // scale
+    final  = img.resize((out_sz, out_sz), Image.LANCZOS)
+    return ImageTk.PhotoImage(final)
+
+
+def _lerp_color(a, b, t):
+    return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
 
 
 class VoiceGUI:
     def __init__(self):
-        self.model     = None
-        self.recording = False
-        self.frames    = []
+        self.model      = None
+        self.recording  = False
+        self.frames     = []
         self.pulse_step = 0
-        self.rms_buf   = [0.0] * 28   # waveform history
+        self.rms_buf    = [0.0] * 28
+        self._img_ref   = None   # keep PhotoImage alive
 
         # ── root ──────────────────────────────────────────────────────────
         self.root = tk.Tk()
         self.root.overrideredirect(True)
-        self.root.configure(bg=BORDER)          # thin border effect
+        self.root.configure(bg=BORDER)
         self.root.attributes("-topmost", True)
         self.root.resizable(False, False)
 
@@ -58,10 +96,9 @@ class VoiceGUI:
         sh = self.root.winfo_screenheight()
         self.root.geometry(f"{W}x{H}+{(sw-W)//2}+{(sh-H)//2}")
 
-        # drag on any widget calls root-level handlers
         self._drag_x = self._drag_y = 0
 
-        # ── inner frame (real bg) ─────────────────────────────────────────
+        # ── inner frame ───────────────────────────────────────────────────
         inner = tk.Frame(self.root, bg=BG)
         inner.pack(fill="both", expand=True, padx=1, pady=1)
 
@@ -72,94 +109,70 @@ class VoiceGUI:
 
         tk.Label(bar, text="  🎙", bg=TOPBAR, fg="#cc3322",
                  font=("Segoe UI Emoji", 11)).pack(side="left")
-        tk.Label(bar, text="voicetr", bg=TOPBAR, fg="#555555",
+        tk.Label(bar, text="claude türkçe ses", bg=TOPBAR, fg="#444444",
                  font=("Segoe UI", 9)).pack(side="left", padx=(2, 0))
 
-        close_btn = tk.Label(bar, text="  ×  ", bg=TOPBAR, fg="#333333",
-                             font=("Segoe UI", 13), cursor="hand2")
-        close_btn.pack(side="right")
-        close_btn.bind("<Button-1>", lambda e: self.root.destroy())
-        close_btn.bind("<Enter>",    lambda e: close_btn.config(fg="#cc4444", bg="#220000"))
-        close_btn.bind("<Leave>",    lambda e: close_btn.config(fg="#333333", bg=TOPBAR))
+        self._close = tk.Label(bar, text="  ×  ", bg=TOPBAR, fg="#2a2a2a",
+                               font=("Segoe UI", 13), cursor="hand2")
+        self._close.pack(side="right")
+        self._close.bind("<Button-1>", lambda e: self.root.destroy())
+        self._close.bind("<Enter>",    lambda e: self._close.config(fg="#cc4444", bg="#200000"))
+        self._close.bind("<Leave>",    lambda e: self._close.config(fg="#2a2a2a", bg=TOPBAR))
 
-        # bind drag to title bar
-        bar.bind("<ButtonPress-1>",  self._drag_start)
-        bar.bind("<B1-Motion>",      self._drag_motion)
-        for child in bar.winfo_children():
-            child.bind("<ButtonPress-1>", self._drag_start)
-            child.bind("<B1-Motion>",     self._drag_motion)
+        for w in [bar] + bar.winfo_children():
+            w.bind("<ButtonPress-1>", self._drag_start)
+            w.bind("<B1-Motion>",     self._drag_motion)
 
-        # separator
         tk.Frame(inner, bg=SEP, height=1).pack(fill="x")
 
         # ── button canvas ─────────────────────────────────────────────────
-        self.cvs = tk.Canvas(inner, width=300, height=130,
+        self.cvs = tk.Canvas(inner, width=CVS_W, height=CVS_H,
                              bg=BG, highlightthickness=0)
         self.cvs.pack()
 
-        cx, cy, r = 150, 65, 38
-        self._cx, self._cy, self._r = cx, cy, r
+        img = _make_circle(BTN_R, BTN_IDLE)
+        self._img_ref = img
+        self.btn_img  = self.cvs.create_image(BTN_CX, BTN_CY, image=img)
 
-        # outer glow ring (animated during recording)
-        self.ring = self.cvs.create_oval(
-            cx-r-12, cy-r-12, cx+r+12, cy+r+12,
-            outline=BORDER, width=2, fill=""
-        )
-        # shadow ring
-        self.cvs.create_oval(
-            cx-r-1, cy-r+2, cx+r+1, cy+r+2,
-            fill="#000000", outline=""
-        )
-        # button
-        self.btn = self.cvs.create_oval(
-            cx-r, cy-r, cx+r, cy+r,
-            fill=BTN_IDLE, outline=""
-        )
-        # mic icon
         self.icon = self.cvs.create_text(
-            cx, cy, text="🎙",
-            font=("Segoe UI Emoji", 18), fill=WHITE
+            BTN_CX, BTN_CY, text="🎙",
+            font=("Segoe UI Emoji", 17), fill="white"
         )
 
-        for item in (self.btn, self.icon):
+        for item in (self.btn_img, self.icon):
             self.cvs.tag_bind(item, "<Button-1>", self._on_click)
             self.cvs.tag_bind(item, "<Enter>",    self._on_hover)
             self.cvs.tag_bind(item, "<Leave>",    self._on_leave)
 
-        # ── waveform canvas ───────────────────────────────────────────────
-        BAR_W, BAR_GAP, WAVE_H = 6, 3, 24
+        # ── waveform ──────────────────────────────────────────────────────
+        BW, BG2, WH = 6, 3, 24
         n = len(self.rms_buf)
-        wave_w = n * (BAR_W + BAR_GAP) - BAR_GAP
-        self.wvs = tk.Canvas(inner, width=wave_w, height=WAVE_H,
+        ww = n * (BW + BG2) - BG2
+        self.wvs = tk.Canvas(inner, width=ww, height=WH,
                               bg=BG, highlightthickness=0)
-        self.wvs.pack(pady=(0, 6))
-        self._bar_items = []
+        self.wvs.pack(pady=(0, 4))
+        self._bars = []
         for i in range(n):
-            x = i * (BAR_W + BAR_GAP)
-            item = self.wvs.create_rectangle(
-                x, WAVE_H//2 - 1, x + BAR_W, WAVE_H//2 + 1,
+            x = i * (BW + BG2)
+            self._bars.append(self.wvs.create_rectangle(
+                x, WH//2 - 1, x + BW, WH//2 + 1,
                 fill=WAVE_DIM, outline=""
-            )
-            self._bar_items.append(item)
-        self._BAR_W, self._BAR_GAP, self._WAVE_H = BAR_W, BAR_GAP, WAVE_H
+            ))
+        self._BW, self._BG2, self._WH = BW, BG2, WH
 
-        # separator
         tk.Frame(inner, bg=SEP, height=1).pack(fill="x")
 
         # ── status bar ────────────────────────────────────────────────────
-        status_frame = tk.Frame(inner, bg="#0a0a0a", height=28)
-        status_frame.pack(fill="x")
-        status_frame.pack_propagate(False)
+        sf = tk.Frame(inner, bg="#0a0a0a", height=28)
+        sf.pack(fill="x")
+        sf.pack_propagate(False)
 
         self.status_var = tk.StringVar(value="loading model…")
-        self.status_lbl = tk.Label(
-            status_frame, textvariable=self.status_var,
-            bg="#0a0a0a", fg=TEXT_DIM,
-            font=("Segoe UI", 8)
-        )
+        self.status_lbl = tk.Label(sf, textvariable=self.status_var,
+                                   bg="#0a0a0a", fg=TEXT_DIM,
+                                   font=("Segoe UI", 8))
         self.status_lbl.pack(side="left", padx=10)
-
-        tk.Label(status_frame, text="TR", bg="#0a0a0a", fg="#1e1e1e",
+        tk.Label(sf, text="TR", bg="#0a0a0a", fg="#1a1a1a",
                  font=("Segoe UI", 7, "bold")).pack(side="right", padx=8)
 
         threading.Thread(target=self._load_model, daemon=True).start()
@@ -172,6 +185,13 @@ class VoiceGUI:
     def _drag_motion(self, e):
         self.root.geometry(f"+{e.x_root - self._drag_x}+{e.y_root - self._drag_y}")
 
+    # ── set button image ───────────────────────────────────────────────────
+    def _set_btn(self, color_rgb, radius=None, glow=0):
+        r = radius if radius is not None else BTN_R
+        img = _make_circle(r, color_rgb, glow_alpha=glow)
+        self._img_ref = img
+        self.cvs.itemconfig(self.btn_img, image=img)
+
     # ── model ──────────────────────────────────────────────────────────────
     def _load_model(self):
         import warnings; warnings.filterwarnings("ignore")
@@ -179,17 +199,17 @@ class VoiceGUI:
         self.root.after(0, self._on_ready)
 
     def _on_ready(self):
-        self.status_var.set("click to record")
+        self.status_var.set("konuşmak için tıkla")
         self.status_lbl.config(fg=TEXT_MID)
 
     # ── hover ──────────────────────────────────────────────────────────────
     def _on_hover(self, e):
         if not self.recording and self.model:
-            self.cvs.itemconfig(self.btn, fill=BTN_HOVER)
+            self._set_btn(BTN_HOVER)
 
     def _on_leave(self, e):
         if not self.recording:
-            self.cvs.itemconfig(self.btn, fill=BTN_IDLE)
+            self._set_btn(BTN_IDLE)
 
     # ── click ──────────────────────────────────────────────────────────────
     def _on_click(self, e):
@@ -203,37 +223,28 @@ class VoiceGUI:
         self._pulse()
         threading.Thread(target=self._record, daemon=True).start()
 
-    # ── pulse + waveform ──────────────────────────────────────────────────
+    # ── pulse animation ────────────────────────────────────────────────────
     def _pulse(self):
         if not self.recording:
             return
         t   = self.pulse_step
-        osc = 0.5 + 0.5 * __import__("math").sin(t * 0.35)
-        r   = int(self._r + osc * 5)
-        cx, cy = self._cx, self._cy
-        self.cvs.coords(self.btn,  cx-r, cy-r, cx+r, cy+r)
-        self.cvs.itemconfig(self.btn, fill=BTN_REC)
-        # ring glow
-        rg  = r + 12
-        lum = int(0x22 + osc * 0x22)
-        self.cvs.coords(self.ring, cx-rg, cy-rg, cx+rg, cy+rg)
-        self.cvs.itemconfig(self.ring, outline=f"#{lum:02x}0000")
-        # waveform bars
+        osc = 0.5 + 0.5 * math.sin(t * 0.4)
+        r   = int(BTN_R + osc * 5)
+        glow = int(60 + osc * 80)
+        self._set_btn(BTN_REC, radius=r, glow=glow)
         self._draw_wave()
         self.pulse_step += 1
-        self.root.after(60, self._pulse)
+        self.root.after(65, self._pulse)
 
     def _draw_wave(self):
-        H    = self._WAVE_H
-        BW   = self._BAR_W
+        H    = self._WH
+        BW   = self._BW
         half = H // 2
-        for i, item in enumerate(self._bar_items):
-            rms  = self.rms_buf[i]
-            h    = max(2, int(rms * 280))
-            h    = min(h, half - 1)
-            x    = i * (BW + self._BAR_GAP)
-            lit  = rms > 0.005
-            color = WAVE_LIT if lit else WAVE_DIM
+        for i, item in enumerate(self._bars):
+            rms   = self.rms_buf[i]
+            h     = max(2, min(int(rms * 300), half - 1))
+            x     = i * (BW + self._BG2)
+            color = WAVE_LIT if rms > 0.005 else WAVE_DIM
             self.wvs.coords(item, x, half - h, x + BW, half + h)
             self.wvs.itemconfig(item, fill=color)
 
@@ -268,20 +279,32 @@ class VoiceGUI:
             pass
 
         self.recording = False
-        self.root.after(0, self._transcribe)
+        self.root.after(0, self._stop_anim)
+
+    # ── stop animation ─────────────────────────────────────────────────────
+    def _stop_anim(self, step=0):
+        """Shrink + fade red→gray over 10 frames (~450ms) then transcribe."""
+        STEPS = 10
+        if step >= STEPS:
+            self._transcribe()
+            return
+        t     = step / (STEPS - 1)
+        ease  = t * t * (3 - 2 * t)          # smoothstep
+        color = _lerp_color(BTN_REC, BTN_BUSY, ease)
+        r     = int(BTN_R + 4 - ease * 8)    # brief overshoot then shrink
+        self._set_btn(color, radius=max(r, BTN_R - 4))
+        # fade waveform bars
+        for item in self._bars:
+            self.wvs.itemconfig(item, fill=WAVE_DIM)
+        self.status_var.set("processing…")
+        self.status_lbl.config(fg=TEXT_DIM)
+        self.root.after(45, lambda: self._stop_anim(step + 1))
 
     # ── transcribe ─────────────────────────────────────────────────────────
     def _transcribe(self):
-        cx, cy, r = self._cx, self._cy, self._r
-        self.cvs.coords(self.btn, cx-r, cy-r, cx+r, cy+r)
-        self.cvs.itemconfig(self.btn, fill=BTN_BUSY)
-        self.cvs.coords(self.ring, cx-r-12, cy-r-12, cx+r+12, cy+r+12)
-        self.cvs.itemconfig(self.ring, outline=BORDER)
-        # dim waveform
-        for item in self._bar_items:
-            self.wvs.itemconfig(item, fill=WAVE_DIM)
+        self._set_btn(BTN_BUSY)
         self.status_var.set("transcribing…")
-        self.status_lbl.config(fg=TEXT_MID)
+        self.status_lbl.config(fg=TEXT_DIM)
         threading.Thread(target=self._do_transcribe, daemon=True).start()
 
     def _do_transcribe(self):
