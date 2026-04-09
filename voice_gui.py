@@ -315,14 +315,22 @@ class VoiceGUI:
     # ── reset to ready ─────────────────────────────────────────────────────
     def _reset(self):
         self._set_btn(BTN_IDLE)
-        short = (self._transcript or "")[:40]
-        if len(self._transcript or "") > 40:
-            short += "…"
-        self.status_var.set(f'"{short}"  —  × ile gönder' if short
-                            else "konuşmak için tıkla")
-        self.status_lbl.config(fg=TEXT_MID)
         self.rms_buf = [0.0] * 28
         self._draw_wave()
+        if self._transcript:
+            try:
+                import pyperclip
+                pyperclip.copy(self._transcript)
+                copied = True
+            except Exception:
+                copied = False
+            short = self._transcript[:38] + ("…" if len(self._transcript) > 38 else "")
+            tag   = " — panoya kopyalandı" if copied else ""
+            self.status_var.set(f'"{short}"{tag}')
+            self.status_lbl.config(fg="#559955")
+        else:
+            self.status_var.set("konuşmak için tıkla")
+            self.status_lbl.config(fg=TEXT_MID)
 
 
 def main():
