@@ -34,3 +34,19 @@ if old.exists():
 
 (skill_dir / "voicetr.md").write_text(voicetr_content, encoding="utf-8")
 print(f"OK /voicetr installed: {skill_dir / 'voicetr.md'}")
+
+# Register hotkey daemon in Windows Startup (Ctrl+Alt+V → /voicetr)
+pythonw = pathlib.Path(python_exe).parent / "pythonw.exe"
+daemon  = repo / "hotkey_daemon.py"
+startup = pathlib.Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+
+shortcut_ps = f"""
+$s = (New-Object -COM WScript.Shell).CreateShortcut('{startup / "voicetr-hotkey.lnk"}')
+$s.TargetPath   = '{pythonw}'
+$s.Arguments    = '"{daemon}"'
+$s.WindowStyle  = 7
+$s.Save()
+"""
+import subprocess
+subprocess.run(["powershell", "-Command", shortcut_ps], capture_output=True)
+print("OK Ctrl+Alt+V hotkey registered in Windows Startup")

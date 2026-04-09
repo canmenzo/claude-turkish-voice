@@ -1,6 +1,6 @@
 @echo off
 echo Installing dependencies...
-python -m pip install openai-whisper sounddevice numpy pyperclip Pillow
+python -m pip install openai-whisper sounddevice numpy pyperclip Pillow keyboard pyautogui
 
 
 echo.
