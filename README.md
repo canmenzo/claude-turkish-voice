@@ -13,7 +13,7 @@ Claude Code için Türkçe sesli giriş. `/voicetr` yaz → butona tıkla → ko
 - 🎤 Butona tıkla → konuş → sessizlikte otomatik durur
 - 🧠 Whisper ile yerel transkripsiyon (API anahtarı gerekmez)
 - 📋 Transcript otomatik panoya kopyalanır
-- **gönder →** butonuna bas → transcript Claude'a gider, pencere kapanır
+- **gönder** butonuna bas → transcript Claude'a gider, pencere kapanır
 - × sadece kapatır, göndermez
 
 ### Gereksinimler
