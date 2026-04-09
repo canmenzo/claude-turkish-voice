@@ -159,17 +159,25 @@ class VoiceGUI:
         silent = 0
         started = False
 
-        with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32") as s:
-            for _ in range(max_chunks):
-                data, _ = s.read(chunk)
-                self.frames.append(data.copy())
-                rms = float(np.sqrt(np.mean(data ** 2)))
-                if rms > SILENCE_THRESHOLD:
-                    started = True; silent = 0
-                elif started:
-                    silent += 1
-                    if silent >= silence_needed:
+        try:
+            with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32") as s:
+                for _ in range(max_chunks):
+                    if not self.recording:
                         break
+                    try:
+                        data, _ = s.read(chunk)
+                    except Exception:
+                        break
+                    self.frames.append(data.copy())
+                    rms = float(np.sqrt(np.mean(data ** 2)))
+                    if rms > SILENCE_THRESHOLD:
+                        started = True; silent = 0
+                    elif started:
+                        silent += 1
+                        if silent >= silence_needed:
+                            break
+        except Exception:
+            pass
 
         self.recording = False
         self.root.after(0, self._transcribe)
