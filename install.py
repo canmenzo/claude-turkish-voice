@@ -6,7 +6,6 @@ Called by install.bat — do not run directly.
 import os
 import sys
 import pathlib
-import subprocess
 
 python_exe = sys.executable
 repo       = pathlib.Path(__file__).parent

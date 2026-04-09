@@ -13,7 +13,8 @@ Claude Code için Türkçe sesli giriş. `/voicetr` yaz → butona tıkla → ko
 - 🎤 Butona tıkla → konuş → sessizlikte otomatik durur
 - 🧠 Whisper ile yerel transkripsiyon (API anahtarı gerekmez)
 - 📋 Transcript otomatik panoya kopyalanır
-- **gönder** butonuna bas → transcript Claude'a gider, pencere kapanır
+- **gönder →** butonuna bas → transcript Claude'a gider, pencere kapanır
+- 3 saniye sonra pencere otomatik tekrar açılır
 - × sadece kapatır, göndermez
 
 ### Gereksinimler
@@ -45,6 +46,7 @@ Turkish voice input for Claude Code. Type `/voicetr` → click record → speak 
 - 🧠 Local Whisper transcription (no API key needed)
 - 📋 Transcript auto-copied to clipboard
 - Click **gönder →** → transcript sent to Claude, window closes
+- Window automatically reopens after 3 seconds
 - × just closes without sending
 
 ### Requirements
@@ -68,6 +70,6 @@ Type `/voicetr` in Claude Code → record → click **gönder →**
 
 | File | Description |
 |------|-------------|
-| `voice_gui.py` | GUI — dark window, anti-aliased button, waveform, send button |
-| `install.py` | Generates skill file with correct local paths |
+| `voice_gui.py` | GUI — dark window, record button, waveform, send button |
+| `install.py` | Writes `/voicetr` skill to `~/.claude/commands/` with local paths |
 | `install.bat` | One-click setup |
