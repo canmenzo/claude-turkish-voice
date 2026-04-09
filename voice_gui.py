@@ -38,29 +38,42 @@ BTN_REC   = (0xff, 0x33, 0x22)
 BTN_BUSY  = (0x28, 0x28, 0x28)
 BTN_GREEN = (0x22, 0xaa, 0x55)
 
-CVS_W, CVS_H           = 300, 148
-BTN_CX, BTN_CY, BTN_R = 150, 74, 40
-IMG_PAD                = 22
+CVS_W, CVS_H           = 300, 158
+BTN_CX, BTN_CY, BTN_R = 150, 79, 40
+IMG_PAD                = 38   # large enough for blur to fully spread
 
+
+_BG_RGB = (13, 13, 13)   # must match BG = "#0d0d0d"
 
 def _make_circle(radius, color_rgb, glow_alpha=0):
     scale = 4
     pad   = IMG_PAD
     sz    = (radius + pad) * 2 * scale
     c     = sz // 2
-    img   = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
+
+    # Build RGBA layer
+    img  = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
     if glow_alpha > 0:
         glow = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
         gd   = ImageDraw.Draw(glow)
-        gr   = (radius + pad // 2) * scale
+        gr   = (radius + pad * 2 // 3) * scale
         gd.ellipse([c-gr, c-gr, c+gr, c+gr], fill=(*color_rgb, glow_alpha))
-        glow = glow.filter(ImageFilter.GaussianBlur(radius * scale // 3))
+        glow = glow.filter(ImageFilter.GaussianBlur(radius * scale // 2))
         img  = Image.alpha_composite(img, glow)
+
     draw = ImageDraw.Draw(img)
     rs   = radius * scale
     draw.ellipse([c-rs, c-rs, c+rs, c+rs], fill=(*color_rgb, 255))
-    out  = sz // scale
-    return ImageTk.PhotoImage(img.resize((out, out), Image.LANCZOS))
+
+    # Downscale with LANCZOS
+    out   = sz // scale
+    img   = img.resize((out, out), Image.LANCZOS)
+
+    # Bake onto solid canvas background so tkinter shows glow correctly
+    # (tkinter PhotoImage doesn't support true RGBA compositing on canvas)
+    flat  = Image.new("RGB", (out, out), _BG_RGB)
+    flat.paste(img, mask=img.split()[3])
+    return ImageTk.PhotoImage(flat)
 
 
 def _lerp(a, b, t):
@@ -84,7 +97,7 @@ class VoiceGUI:
         self.root.attributes("-topmost", True)
         self.root.resizable(False, False)
 
-        W, H = 300, 250
+        W, H = 300, 260
         self.root.update_idletasks()
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
