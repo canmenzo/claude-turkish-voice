@@ -38,9 +38,9 @@ BTN_REC   = (0xff, 0x33, 0x22)
 BTN_BUSY  = (0x28, 0x28, 0x28)
 BTN_GREEN = (0x22, 0xaa, 0x55)
 
-CVS_W, CVS_H           = 300, 130
-BTN_CX, BTN_CY, BTN_R = 150, 63, 40
-IMG_PAD                = 20
+CVS_W, CVS_H           = 300, 148
+BTN_CX, BTN_CY, BTN_R = 150, 74, 40
+IMG_PAD                = 22
 
 
 def _make_circle(radius, color_rgb, glow_alpha=0):
@@ -84,7 +84,7 @@ class VoiceGUI:
         self.root.attributes("-topmost", True)
         self.root.resizable(False, False)
 
-        W, H = 300, 240
+        W, H = 300, 250
         self.root.update_idletasks()
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
