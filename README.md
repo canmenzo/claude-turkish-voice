@@ -6,14 +6,13 @@
 
 ## Türkçe
 
-Claude Code için Türkçe sesli giriş. `/voicetr` yaz, butona tıkla, konuş — sözlerin otomatik olarak Claude'a iletilir.
+Claude Code için Türkçe sesli giriş. `/voicetr` yaz, butona tıkla, konuş, × ile gönder.
 
 ### Nasıl çalışır
 
-- 🎤 Butona tıkla, Türkçe konuş
-- 🔇 Sessizlik algılanınca otomatik durur
+- 🎤 Butona tıkla → Türkçe konuş → sessizlikte otomatik durur
 - 🧠 Whisper ile yerel transkripsiyon (API anahtarı gerekmez)
-- ⚡ Transcript doğrudan Claude Code prompt'una gelir
+- 🪟 Pencere açık kalır — **×** ile kapatınca transcript Claude'a gider
 
 ### Gereksinimler
 
@@ -30,25 +29,19 @@ install.bat
 
 ### Kullanım
 
-- **`/voicetr`** — küçük koyu pencere açılır, kırmızı butona tıkla, konuş, kapanır
-- **`/voice`** — terminal tabanlı fallback versiyon
-
-### Doğruluk ayarı
-
-`voice_capture.py` ve `voice_gui.py` içinde `MODEL_SIZE = "medium"` → `"large"` yaparak doğruluğu artırabilirsin (daha yavaş).
+Claude Code içinde `/voicetr` yaz → pencere açılır → butona tıkla → konuş → **×** ile kapat → Claude cevap verir.
 
 ---
 
 ## English
 
-Turkish voice input for Claude Code. Type `/voicetr`, click the button, speak — your words go straight into Claude.
+Turkish voice input for Claude Code. Type `/voicetr`, click the button, speak, close with × to send.
 
 ### How it works
 
-- 🎤 Click the button, speak Turkish
-- 🔇 Auto-stops on silence detection
+- 🎤 Click button → speak Turkish → auto-stops on silence
 - 🧠 Local Whisper transcription (no API key needed)
-- ⚡ Transcript feeds directly into Claude Code as your prompt
+- 🪟 Window stays open — closing with **×** sends the transcript to Claude
 
 ### Requirements
 
@@ -65,14 +58,12 @@ First run downloads the Whisper `medium` model (~1.5GB).
 
 ### Usage
 
-- **`/voicetr`** — opens a small dark GUI window with animated record button
-- **`/voice`** — terminal-based fallback
+Type `/voicetr` in Claude Code → window opens → click button → speak → close with **×** → Claude responds.
 
 ### Files
 
 | File | Description |
 |------|-------------|
-| `voice_gui.py` | GUI skill — dark window, anti-aliased button, waveform |
-| `voice_capture.py` | Terminal fallback — records until silence, prints transcript |
-| `install.py` | Generates skill files with correct local paths |
+| `voice_gui.py` | GUI — dark window, anti-aliased button, waveform bars |
+| `install.py` | Generates skill file with correct local paths |
 | `install.bat` | One-click setup |
