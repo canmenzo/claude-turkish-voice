@@ -9,12 +9,18 @@ import io
 import math
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
+import os
+import pathlib
 import threading
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageFilter, ImageTk
 import numpy as np
 import sounddevice as sd
 import whisper
+
+CLAUDE_DIR  = pathlib.Path.home() / ".claude"
+OUTPUT_FILE = CLAUDE_DIR / "voicetr_output.txt"
+PID_FILE    = CLAUDE_DIR / "voicetr.pid"
 
 SAMPLE_RATE       = 16000
 SILENCE_THRESHOLD = 0.01
@@ -92,6 +98,10 @@ class VoiceGUI:
         self.root.geometry(f"{W}x{H}+{(sw-W)//2}+{(sh-H)//2}")
 
         self._drag_x = self._drag_y = 0
+
+        # Write PID so skill script knows we're running
+        CLAUDE_DIR.mkdir(exist_ok=True)
+        PID_FILE.write_text(str(os.getpid()))
 
         # ── inner frame ───────────────────────────────────────────────────
         inner = tk.Frame(self.root, bg=BG)
@@ -177,8 +187,8 @@ class VoiceGUI:
 
     # ── close ──────────────────────────────────────────────────────────────
     def _close(self):
-        if self._transcript:
-            print(self._transcript, flush=True)
+        if PID_FILE.exists():
+            PID_FILE.unlink()
         self.root.destroy()
 
     # ── drag ──────────────────────────────────────────────────────────────
@@ -314,23 +324,44 @@ class VoiceGUI:
 
     # ── reset to ready ─────────────────────────────────────────────────────
     def _reset(self):
-        self._set_btn(BTN_IDLE)
         self.rms_buf = [0.0] * 28
         self._draw_wave()
         if self._transcript:
+            # Write for skill script to pick up
+            try:
+                OUTPUT_FILE.write_text(self._transcript, encoding="utf-8")
+            except Exception:
+                pass
+            # Copy to clipboard
             try:
                 import pyperclip
                 pyperclip.copy(self._transcript)
-                copied = True
             except Exception:
-                copied = False
-            short = self._transcript[:38] + ("…" if len(self._transcript) > 38 else "")
-            tag   = " — panoya kopyalandı" if copied else ""
-            self.status_var.set(f'"{short}"{tag}')
-            self.status_lbl.config(fg="#559955")
+                pass
+            # Show success: green flash then reset
+            self.status_var.set("kopyalandi")
+            self.status_lbl.config(fg="#55aa66")
+            self._success_flash()
         else:
+            self._set_btn(BTN_IDLE)
             self.status_var.set("konuşmak için tıkla")
             self.status_lbl.config(fg=TEXT_MID)
+
+    # ── success flash ──────────────────────────────────────────────────────
+    def _success_flash(self, step=0):
+        BTN_GREEN = (0x22, 0xaa, 0x55)
+        HALF = 5
+        TOTAL = HALF * 2
+        if step >= TOTAL:
+            self._set_btn(BTN_IDLE)
+            self._transcript = None
+            self.status_var.set("konuşmak için tıkla")
+            self.status_lbl.config(fg=TEXT_MID)
+            return
+        t = (step % HALF) / (HALF - 1)
+        color = _lerp(BTN_IDLE, BTN_GREEN, t) if step < HALF else _lerp(BTN_GREEN, BTN_IDLE, t)
+        self._set_btn(color)
+        self.root.after(90, lambda: self._success_flash(step + 1))
 
 
 def main():
