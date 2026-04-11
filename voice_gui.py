@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-Claude Türkçe Ses — Modern AI UI v3
-Canvas-oval button (no PIL square artifact), sonar rings, spinner arc, TR/EN toggle.
+Claude Türkçe Ses — Modern AI UI v4
+PIL anti-aliased button (no square: pd=0), subtle top-highlight, halo ring,
+sonar rings, spinner arc, TR/EN toggle.
 """
 import sys, io, math, threading
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 import tkinter as tk
+from PIL import Image, ImageDraw, ImageTk
 import numpy as np
 import sounddevice as sd
 import whisper
@@ -71,6 +73,7 @@ STAT_H       = 44
 BOT_H        = 46
 
 BTN_CX, BTN_CY, BTN_R = 180, 110, 52
+HALO_R      = BTN_R + 8     # permanent faint ring around button
 GLOW_STEPS  = 28
 GLOW_EXT    = 62
 
@@ -94,12 +97,46 @@ def _hex(c):
     return f"#{c[0]:02x}{c[1]:02x}{c[2]:02x}"
 
 
+def _make_btn(radius, rgb):
+    """
+    Anti-aliased circle via PIL 4× supersampling + LANCZOS.
+    pd=0: image exactly fits circle, no BG border square artifact.
+    Subtle top highlight adds depth (glass button feel).
+    """
+    sc  = 4
+    sz  = radius * 2 * sc   # exact fit, zero padding
+    c   = sz // 2
+    r   = radius * sc
+
+    # Base circle
+    base = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
+    ImageDraw.Draw(base).ellipse([c-r, c-r, c+r, c+r], fill=(*rgb, 255))
+
+    # Subtle top-arc highlight (white, 12% opacity) — gives glass/depth feel
+    hl = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
+    hr = int(r * 0.72)
+    # Top elliptical cap: spans full width, covers top ~45% of circle
+    ImageDraw.Draw(hl).ellipse(
+        [c - hr, c - r, c + hr, c - r + int(r * 0.9)],
+        fill=(255, 255, 255, 22)
+    )
+    combined = Image.alpha_composite(base, hl)
+
+    # Downscale to final size (LANCZOS = best AA)
+    out  = radius * 2
+    flat = Image.new("RGB", (out, out), _BG)
+    rsz  = combined.resize((out, out), Image.LANCZOS)
+    flat.paste(rsz, mask=rsz.split()[3])
+    return ImageTk.PhotoImage(flat)
+
+
 class VoiceGUI:
     def __init__(self):
         self.model       = None
         self.recording   = False
         self.frames      = []
         self.rms_buf     = [0.0] * WAVE_N
+        self._img_ref    = None
         self._transcript = None
         self._tick       = 0
         self._ring_phase = 0.0
@@ -139,7 +176,6 @@ class VoiceGUI:
         self._xbtn.bind("<Enter>",    lambda e: self._xbtn.config(fg="#e05060", bg="#18080c"))
         self._xbtn.bind("<Leave>",    lambda e: self._xbtn.config(fg=TXT_DIM,  bg=BG_HEX))
 
-        # Language toggle — shows the OTHER language (what you'll switch to)
         self._lang_btn = tk.Label(bar, text="EN", bg=BG_HEX, fg=TXT_DIM,
                                   font=("Segoe UI", 8, "bold"), cursor="hand2", padx=6)
         self._lang_btn.pack(side="right")
@@ -158,15 +194,16 @@ class VoiceGUI:
                              bg=BG_HEX, highlightthickness=0)
         self.cvs.pack()
 
-        # Z-order (back → front): rings → glow → wave bars → button oval → spinner → icon
+        # Z-order (back → front):
+        # sonar rings → glow ovals → wave bars → button image → halo ring → spinner → icon
 
-        # Sonar rings — hidden (coords 0,0,0,0) until recording
+        # Sonar rings (hidden until recording)
         self._rings = [
             self.cvs.create_oval(0, 0, 0, 0, fill="", outline="", width=1)
             for _ in range(RING_N)
         ]
 
-        # Glow ovals — hidden until needed
+        # Glow ovals (radial ambient glow, hidden until active)
         self._glow = [
             self.cvs.create_oval(0, 0, 0, 0, fill=BG_HEX, outline="")
             for _ in range(GLOW_STEPS)
@@ -184,14 +221,19 @@ class VoiceGUI:
             )
             self._bars.append((bid, x))
 
-        # Button — pure canvas oval, no PIL, no square artifact
-        self._btn_oval = self.cvs.create_oval(
-            BTN_CX - BTN_R, BTN_CY - BTN_R,
-            BTN_CX + BTN_R, BTN_CY + BTN_R,
-            fill=_hex(IDLE_RGB), outline=""
+        # Button — PIL anti-aliased image (pd=0, no square)
+        img = _make_btn(BTN_R, IDLE_RGB)
+        self._img_ref = img
+        self._btn_id  = self.cvs.create_image(BTN_CX, BTN_CY, image=img)
+
+        # Halo ring — subtle permanent circle outline outside button
+        self._halo = self.cvs.create_oval(
+            BTN_CX - HALO_R, BTN_CY - HALO_R,
+            BTN_CX + HALO_R, BTN_CY + HALO_R,
+            fill="", outline=TXT_DIM, width=1
         )
 
-        # Spinner arc — hidden (outline="") until processing
+        # Spinner arc (hidden until processing)
         AR = BTN_R + 14
         self._spinner = self.cvs.create_arc(
             BTN_CX - AR, BTN_CY - AR, BTN_CX + AR, BTN_CY + AR,
@@ -206,7 +248,7 @@ class VoiceGUI:
             font=("Segoe UI Emoji", 20), fill=TXT_HI
         )
 
-        for item in (self._btn_oval, self._icon):
+        for item in (self._btn_id, self._icon):
             self.cvs.tag_bind(item, "<Button-1>", self._on_click)
             self.cvs.tag_bind(item, "<Enter>",    self._on_enter)
             self.cvs.tag_bind(item, "<Leave>",    self._on_leave)
@@ -250,11 +292,9 @@ class VoiceGUI:
 
     def _toggle_lang(self, e=None):
         self._lang = 'en' if self._lang == 'tr' else 'tr'
-        # Button shows the other language (what you'd switch to next)
         self._lang_btn.config(text='EN' if self._lang == 'tr' else 'TR')
         self._title_lbl.config(text=f"  {self._s('title')}")
         self._sbcvs.itemconfig(self._sb_txt, text=self._s('send'))
-        # Refresh status if in a stable (non-animated) state
         if self._loading:
             self._sv.set(self._s('loading'))
         elif not self.recording and not self._spinning:
@@ -293,12 +333,26 @@ class VoiceGUI:
         self._sv.set(self._s('ready'))
         self._slbl.config(fg=TXT_MID)
 
-    # ── Button (canvas oval) + glow ────────────────────────────────────────
-    def _set_btn(self, rgb, radius=None, glow_alpha=0):
+    # ── Button (PIL) + halo + glow ─────────────────────────────────────────
+    def _set_btn(self, rgb, radius=None, glow_alpha=0, halo=None):
         r  = radius if radius is not None else BTN_R
         cx, cy = BTN_CX, BTN_CY
-        self.cvs.coords(self._btn_oval, cx-r, cy-r, cx+r, cy+r)
-        self.cvs.itemconfig(self._btn_oval, fill=_hex(rgb))
+
+        img = _make_btn(r, rgb)
+        self._img_ref = img
+        self.cvs.itemconfig(self._btn_id, image=img)
+
+        # Halo ring: default = faint idle color; override with halo param
+        if halo is not None:
+            self.cvs.itemconfig(self._halo, outline=halo)
+        else:
+            # Halo mirrors glow state
+            if glow_alpha > 0:
+                t = glow_alpha / 255.0
+                c = _lerp(_BG, rgb, t * 0.35)
+                self.cvs.itemconfig(self._halo, outline=_hex(c))
+            else:
+                self.cvs.itemconfig(self._halo, outline=TXT_DIM)
 
         for i, oval in enumerate(self._glow):
             if glow_alpha == 0:
@@ -365,7 +419,8 @@ class VoiceGUI:
     # ── Hover ──────────────────────────────────────────────────────────────
     def _on_enter(self, e):
         if not self.recording and self.model and not self._loading:
-            self._set_btn(HOVER_RGB, glow_alpha=55)
+            self._set_btn(HOVER_RGB, glow_alpha=55,
+                          halo=_hex(_lerp(TXT_DIM_TUPLE, HOVER_RGB, 0.5)))
 
     def _on_leave(self, e):
         if not self.recording and not self._loading:
@@ -392,8 +447,9 @@ class VoiceGUI:
         if not self.recording:
             return
         osc = 0.5 + 0.5 * math.sin(self._tick * 0.32)
-        self._set_btn(REC_RGB, radius=int(BTN_R + osc * 4),
-                      glow_alpha=int(65 + osc * 145))
+        g   = int(65 + osc * 145)
+        self._set_btn(REC_RGB, radius=int(BTN_R + osc * 4), glow_alpha=g,
+                      halo=_hex(_lerp(_BG, REC_RGB, 0.5)))
         self._ring_phase = (self._ring_phase + 0.011) % 1.0
         self._draw_rings(REC_RGB, visible=True)
         self._draw_wave(active=True)
@@ -492,7 +548,9 @@ class VoiceGUI:
             return
         t   = (step % HALF) / (HALF - 1)
         rgb = _lerp(IDLE_RGB, OK_RGB, t) if step < HALF else _lerp(OK_RGB, IDLE_RGB, t)
-        self._set_btn(rgb, glow_alpha=int(55 * math.sin(math.pi * step / TOTAL)))
+        self._set_btn(rgb, glow_alpha=int(55 * math.sin(math.pi * step / TOTAL)),
+                      halo=_hex(_lerp(TXT_DIM_TUPLE, OK_RGB,
+                                      math.sin(math.pi * step / TOTAL))))
         self.root.after(75, lambda: self._flash_ok(step + 1))
 
     # ── Send button ────────────────────────────────────────────────────────
@@ -524,6 +582,10 @@ class VoiceGUI:
             )
         threading.Timer(3.0, _relaunch).start()
         self.root.destroy()
+
+
+# TXT_DIM as RGB tuple (needed for lerp in halo calculations)
+TXT_DIM_TUPLE = (30, 30, 48)
 
 
 def main():
