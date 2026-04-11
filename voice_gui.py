@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-Claude Türkçe Ses — Modern AI UI v2
-Dark navy theme, sonar rings, gradient waveform, spinner arc.
+Claude Türkçe Ses — Modern AI UI v3
+Canvas-oval button (no PIL square artifact), sonar rings, spinner arc, TR/EN toggle.
 """
 import sys, io, math, threading
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 import tkinter as tk
-from PIL import Image, ImageDraw, ImageTk
 import numpy as np
 import sounddevice as sd
 import whisper
@@ -19,28 +18,50 @@ SILENCE_DURATION  = 2.0
 MAX_DURATION      = 60
 MODEL_SIZE        = "medium"
 
-# ── Palette — dark navy, purple accent (Claude/ChatGPT vibe) ───────────────
+# ── Bilingual strings ──────────────────────────────────────────────────────
+STRINGS = {
+    'tr': {
+        'title':        'ses',
+        'loading':      'model yükleniyor…',
+        'ready':        'tıkla, konuş',
+        'listening':    'dinliyorum…',
+        'processing':   'işleniyor…',
+        'transcribing': 'transkript alınıyor…',
+        'copied':       'kopyalandı ✓',
+        'send':         'gönder →',
+    },
+    'en': {
+        'title':        'voice',
+        'loading':      'loading model…',
+        'ready':        'click to speak',
+        'listening':    'listening…',
+        'processing':   'processing…',
+        'transcribing': 'transcribing…',
+        'copied':       'copied ✓',
+        'send':         'send →',
+    },
+}
+
+# ── Palette ────────────────────────────────────────────────────────────────
 BG_HEX   = "#0c0c12"
 _BG      = (12, 12, 18)
 STROKE   = "#191926"
 SURF     = "#10101a"
 
-IDLE_RGB    = (46, 44, 72)      # dim purple-grey
-HOVER_RGB   = (88,  60, 195)    # purple on hover
-ACCENT_RGB  = (108, 72, 228)    # main purple
-REC_RGB     = (210, 48,  48)    # recording red
-BUSY_RGB    = (30,  30,  46)    # processing (dark)
-OK_RGB      = (30, 172,  88)    # success green
+IDLE_RGB    = (46, 44, 72)
+HOVER_RGB   = (88,  60, 195)
+ACCENT_RGB  = (108, 72, 228)
+REC_RGB     = (210, 48,  48)
+BUSY_RGB    = (30,  30,  46)
+OK_RGB      = (30, 172,  88)
 
 ACCENT_HEX  = "#6c48e4"
-REC_HEX     = "#d23030"
 
 TXT_HI   = "#d4d6f0"
 TXT_MID  = "#44466a"
 TXT_DIM  = "#1e1e30"
 TXT_REC  = "#ff6464"
 TXT_OK   = "#3ed882"
-TXT_ACC  = "#9278f0"
 
 # ── Layout ─────────────────────────────────────────────────────────────────
 WIN_W, WIN_H = 360, 374
@@ -53,12 +74,10 @@ BTN_CX, BTN_CY, BTN_R = 180, 110, 52
 GLOW_STEPS  = 28
 GLOW_EXT    = 62
 
-# Sonar rings (recording animation)
 RING_N     = 3
 RING_MIN_R = BTN_R + 4
 RING_MAX_R = BTN_R + 80
 
-# Waveform (inside main canvas)
 WAVE_N   = 30
 WAVE_BW  = 4
 WAVE_GAP = 3
@@ -66,7 +85,6 @@ WAVE_Y   = 208
 WAVE_MH  = 22
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────
 def _lerp(a, b, t):
     t = max(0.0, min(1.0, t))
     return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
@@ -76,36 +94,18 @@ def _hex(c):
     return f"#{c[0]:02x}{c[1]:02x}{c[2]:02x}"
 
 
-def _make_btn(radius, rgb):
-    """Anti-aliased PIL circle baked onto BG color."""
-    sc, pd = 4, 4
-    sz = (radius + pd) * 2 * sc
-    c  = sz // 2
-    img = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
-    ImageDraw.Draw(img).ellipse(
-        [c - radius*sc, c - radius*sc, c + radius*sc, c + radius*sc],
-        fill=(*rgb, 255)
-    )
-    out  = sz // sc
-    flat = Image.new("RGB", (out, out), _BG)
-    rsz  = img.resize((out, out), Image.LANCZOS)
-    flat.paste(rsz, mask=rsz.split()[3])
-    return ImageTk.PhotoImage(flat)
-
-
-# ── Main GUI ───────────────────────────────────────────────────────────────
 class VoiceGUI:
     def __init__(self):
         self.model       = None
         self.recording   = False
         self.frames      = []
         self.rms_buf     = [0.0] * WAVE_N
-        self._img_ref    = None
         self._transcript = None
         self._tick       = 0
         self._ring_phase = 0.0
         self._spinning   = False
         self._loading    = True
+        self._lang       = 'tr'
 
         # ── Root window ────────────────────────────────────────────────────
         self.root = tk.Tk()
@@ -119,7 +119,6 @@ class VoiceGUI:
         self.root.geometry(f"{WIN_W}x{WIN_H}+{(sw-WIN_W)//2}+{(sh-WIN_H)//2}")
         self._dx = self._dy = 0
 
-        # ── Inner frame (1 px border via root bg) ──────────────────────────
         inner = tk.Frame(self.root, bg=BG_HEX)
         inner.pack(fill="both", expand=True, padx=1, pady=1)
 
@@ -128,9 +127,10 @@ class VoiceGUI:
         bar.pack(fill="x")
         bar.pack_propagate(False)
 
-        title = tk.Label(bar, text="  voice", bg=BG_HEX, fg=TXT_DIM,
-                         font=("Segoe UI", 9), cursor="fleur")
-        title.pack(side="left", padx=(2, 0))
+        self._title_lbl = tk.Label(bar, text=f"  {self._s('title')}",
+                                   bg=BG_HEX, fg=TXT_DIM,
+                                   font=("Segoe UI", 9), cursor="fleur")
+        self._title_lbl.pack(side="left", padx=(2, 0))
 
         self._xbtn = tk.Label(bar, text="✕", bg=BG_HEX, fg=TXT_DIM,
                               font=("Segoe UI", 10), cursor="hand2", padx=14)
@@ -139,7 +139,15 @@ class VoiceGUI:
         self._xbtn.bind("<Enter>",    lambda e: self._xbtn.config(fg="#e05060", bg="#18080c"))
         self._xbtn.bind("<Leave>",    lambda e: self._xbtn.config(fg=TXT_DIM,  bg=BG_HEX))
 
-        for w in (bar, title):
+        # Language toggle — shows the OTHER language (what you'll switch to)
+        self._lang_btn = tk.Label(bar, text="EN", bg=BG_HEX, fg=TXT_DIM,
+                                  font=("Segoe UI", 8, "bold"), cursor="hand2", padx=6)
+        self._lang_btn.pack(side="right")
+        self._lang_btn.bind("<Button-1>", self._toggle_lang)
+        self._lang_btn.bind("<Enter>",    lambda e: self._lang_btn.config(fg=TXT_HI))
+        self._lang_btn.bind("<Leave>",    lambda e: self._lang_btn.config(fg=TXT_DIM))
+
+        for w in (bar, self._title_lbl):
             w.bind("<ButtonPress-1>", self._drag_start)
             w.bind("<B1-Motion>",     self._drag_move)
 
@@ -150,15 +158,15 @@ class VoiceGUI:
                              bg=BG_HEX, highlightthickness=0)
         self.cvs.pack()
 
-        # Z-order (back → front): rings → glow → wave bars → button → spinner → icon
+        # Z-order (back → front): rings → glow → wave bars → button oval → spinner → icon
 
-        # Sonar rings — outline-only ovals, visible during recording
+        # Sonar rings — hidden (coords 0,0,0,0) until recording
         self._rings = [
-            self.cvs.create_oval(0, 0, 0, 0, fill="", outline=BG_HEX, width=1)
+            self.cvs.create_oval(0, 0, 0, 0, fill="", outline="", width=1)
             for _ in range(RING_N)
         ]
 
-        # Glow ovals — soft radial fill behind button
+        # Glow ovals — hidden until needed
         self._glow = [
             self.cvs.create_oval(0, 0, 0, 0, fill=BG_HEX, outline="")
             for _ in range(GLOW_STEPS)
@@ -176,28 +184,29 @@ class VoiceGUI:
             )
             self._bars.append((bid, x))
 
-        # Button image (PIL AA circle)
-        img = _make_btn(BTN_R, IDLE_RGB)
-        self._img_ref = img
-        self._btn_id  = self.cvs.create_image(BTN_CX, BTN_CY, image=img)
+        # Button — pure canvas oval, no PIL, no square artifact
+        self._btn_oval = self.cvs.create_oval(
+            BTN_CX - BTN_R, BTN_CY - BTN_R,
+            BTN_CX + BTN_R, BTN_CY + BTN_R,
+            fill=_hex(IDLE_RGB), outline=""
+        )
 
-        # Spinner arc (around button, processing state)
+        # Spinner arc — hidden (outline="") until processing
         AR = BTN_R + 14
         self._spinner = self.cvs.create_arc(
             BTN_CX - AR, BTN_CY - AR, BTN_CX + AR, BTN_CY + AR,
-            start=90, extent=110, style="arc",
-            outline=BG_HEX, width=2
+            start=90, extent=115, style="arc",
+            outline="", width=2
         )
         self._spin_angle = 90
 
-        # Mic / state icon (topmost)
+        # Icon text (topmost)
         self._icon = self.cvs.create_text(
             BTN_CX, BTN_CY, text="🎙",
             font=("Segoe UI Emoji", 20), fill=TXT_HI
         )
 
-        # Bind button & icon
-        for item in (self._btn_id, self._icon):
+        for item in (self._btn_oval, self._icon):
             self.cvs.tag_bind(item, "<Button-1>", self._on_click)
             self.cvs.tag_bind(item, "<Enter>",    self._on_enter)
             self.cvs.tag_bind(item, "<Leave>",    self._on_leave)
@@ -209,35 +218,50 @@ class VoiceGUI:
         stat.pack(fill="x")
         stat.pack_propagate(False)
 
-        self._sv  = tk.StringVar(value="model yükleniyor…")
+        self._sv   = tk.StringVar(value=self._s('loading'))
         self._slbl = tk.Label(stat, textvariable=self._sv,
-                              bg=BG_HEX, fg=TXT_DIM,
-                              font=("Segoe UI", 10))
+                              bg=BG_HEX, fg=TXT_DIM, font=("Segoe UI", 10))
         self._slbl.pack(expand=True)
 
         tk.Frame(inner, bg=STROKE, height=1).pack(fill="x")
 
-        # ── Bottom bar — send button ─────────────────────────────────────
+        # ── Bottom bar (send button) ─────────────────────────────────────
         bot = tk.Frame(inner, bg=SURF, height=BOT_H)
         bot.pack(fill="x")
         bot.pack_propagate(False)
 
-        # Canvas-drawn send button for clean styling
         self._sbcvs = tk.Canvas(bot, width=130, height=30,
-                                bg=SURF, highlightthickness=0,
-                                cursor="hand2")
+                                bg=SURF, highlightthickness=0, cursor="hand2")
         self._sbcvs.place(relx=0.5, rely=0.5, anchor="center")
-        self._sb_bg  = self._sbcvs.create_rectangle(
-            0, 0, 130, 30, fill=TXT_DIM, outline="")
+        self._sb_bg  = self._sbcvs.create_rectangle(0, 0, 130, 30,
+                                                      fill=TXT_DIM, outline="")
         self._sb_txt = self._sbcvs.create_text(
-            65, 15, text="gönder →",
+            65, 15, text=self._s('send'),
             fill=BG_HEX, font=("Segoe UI", 9, "bold"))
         self._sbcvs.bind("<Button-1>", self._send)
         self._send_active = False
 
-        # Start model load + loading animation
         threading.Thread(target=self._load_model, daemon=True).start()
         self._loading_anim()
+
+    # ── Language ───────────────────────────────────────────────────────────
+    def _s(self, key):
+        return STRINGS[self._lang][key]
+
+    def _toggle_lang(self, e=None):
+        self._lang = 'en' if self._lang == 'tr' else 'tr'
+        # Button shows the other language (what you'd switch to next)
+        self._lang_btn.config(text='EN' if self._lang == 'tr' else 'TR')
+        self._title_lbl.config(text=f"  {self._s('title')}")
+        self._sbcvs.itemconfig(self._sb_txt, text=self._s('send'))
+        # Refresh status if in a stable (non-animated) state
+        if self._loading:
+            self._sv.set(self._s('loading'))
+        elif not self.recording and not self._spinning:
+            if self._send_active and self._transcript:
+                self._sv.set(self._s('copied'))
+            else:
+                self._sv.set(self._s('ready'))
 
     # ── Drag ───────────────────────────────────────────────────────────────
     def _drag_start(self, e):
@@ -247,13 +271,12 @@ class VoiceGUI:
     def _drag_move(self, e):
         self.root.geometry(f"+{e.x_root - self._dx}+{e.y_root - self._dy}")
 
-    # ── Loading pulse (while model loads) ──────────────────────────────────
+    # ── Loading pulse ──────────────────────────────────────────────────────
     def _loading_anim(self):
         if not self._loading:
             return
         osc = 0.5 + 0.5 * math.sin(self._tick * 0.12)
-        g   = int(20 + osc * 38)
-        self._set_btn(IDLE_RGB, glow_alpha=g)
+        self._set_btn(IDLE_RGB, glow_alpha=int(20 + osc * 38))
         self._tick += 1
         self.root.after(60, self._loading_anim)
 
@@ -267,22 +290,21 @@ class VoiceGUI:
         self._loading = False
         self._tick    = 0
         self._set_btn(IDLE_RGB)
-        self._sv.set("tıkla, konuş")
+        self._sv.set(self._s('ready'))
         self._slbl.config(fg=TXT_MID)
 
-    # ── Glow ───────────────────────────────────────────────────────────────
+    # ── Button (canvas oval) + glow ────────────────────────────────────────
     def _set_btn(self, rgb, radius=None, glow_alpha=0):
-        r   = radius if radius is not None else BTN_R
-        img = _make_btn(r, rgb)
-        self._img_ref = img
-        self.cvs.itemconfig(self._btn_id, image=img)
-
+        r  = radius if radius is not None else BTN_R
         cx, cy = BTN_CX, BTN_CY
+        self.cvs.coords(self._btn_oval, cx-r, cy-r, cx+r, cy+r)
+        self.cvs.itemconfig(self._btn_oval, fill=_hex(rgb))
+
         for i, oval in enumerate(self._glow):
             if glow_alpha == 0:
                 self.cvs.coords(oval, 0, 0, 0, 0)
                 continue
-            t      = i / (GLOW_STEPS - 1)          # 0 = outermost, 1 = innermost
+            t      = i / (GLOW_STEPS - 1)
             oval_r = r + int(GLOW_EXT * (1.0 - t))
             intens = (glow_alpha / 255.0) * (t ** 1.4)
             c      = _lerp(_BG, rgb, intens)
@@ -291,16 +313,15 @@ class VoiceGUI:
 
     # ── Sonar rings ────────────────────────────────────────────────────────
     def _draw_rings(self, rgb, visible=True):
-        if not visible:
-            for ring in self._rings:
-                self.cvs.itemconfig(ring, outline=BG_HEX)
-            return
         cx, cy = BTN_CX, BTN_CY
         step = 1.0 / RING_N
         for i, ring in enumerate(self._rings):
+            if not visible:
+                self.cvs.coords(ring, 0, 0, 0, 0)
+                continue
             phase = (self._ring_phase + i * step) % 1.0
             r     = int(RING_MIN_R + phase * (RING_MAX_R - RING_MIN_R))
-            alpha = (1.0 - phase) ** 2     # fade as it expands
+            alpha = (1.0 - phase) ** 2
             c     = _lerp(_BG, rgb, alpha * 0.6)
             w     = max(1, int((1.0 - phase) * 2.5))
             self.cvs.coords(ring, cx-r, cy-r, cx+r, cy+r)
@@ -312,7 +333,7 @@ class VoiceGUI:
             rms = self.rms_buf[i]
             if active and rms > 0.002:
                 h = max(2, min(int(rms * 340), WAVE_MH))
-                t = min(rms / 0.06, 1.0)   # gradient: dim → accent
+                t = min(rms / 0.06, 1.0)
                 c = _lerp(IDLE_RGB, ACCENT_RGB, t)
                 self.cvs.coords(bid, x, WAVE_Y-h, x+WAVE_BW, WAVE_Y+h)
                 self.cvs.itemconfig(bid, fill=_hex(c))
@@ -320,18 +341,17 @@ class VoiceGUI:
                 self.cvs.coords(bid, x, WAVE_Y-2, x+WAVE_BW, WAVE_Y+2)
                 self.cvs.itemconfig(bid, fill=TXT_DIM)
 
-    # ── Spinner arc (processing) ───────────────────────────────────────────
+    # ── Spinner arc ────────────────────────────────────────────────────────
     def _spin_start(self):
         self._spinning   = True
         self._spin_angle = 90
         AR = BTN_R + 14
-        self.cvs.coords(self._spinner,
-                        BTN_CX-AR, BTN_CY-AR, BTN_CX+AR, BTN_CY+AR)
+        self.cvs.coords(self._spinner, BTN_CX-AR, BTN_CY-AR, BTN_CX+AR, BTN_CY+AR)
         self._do_spin()
 
     def _spin_stop(self):
         self._spinning = False
-        self.cvs.itemconfig(self._spinner, outline=BG_HEX)
+        self.cvs.itemconfig(self._spinner, outline="")
 
     def _do_spin(self):
         if not self._spinning:
@@ -351,17 +371,17 @@ class VoiceGUI:
         if not self.recording and not self._loading:
             self._set_btn(IDLE_RGB)
 
-    # ── Click — start recording ────────────────────────────────────────────
+    # ── Click ──────────────────────────────────────────────────────────────
     def _on_click(self, e):
         if not self.model or self.recording or self._loading:
             return
-        self.recording    = True
-        self.frames       = []
-        self._tick        = 0
-        self._ring_phase  = 0.0
-        self._transcript  = None
+        self.recording   = True
+        self.frames      = []
+        self._tick       = 0
+        self._ring_phase = 0.0
+        self._transcript = None
         self._set_send(False)
-        self._sv.set("dinliyorum…")
+        self._sv.set(self._s('listening'))
         self._slbl.config(fg=TXT_REC)
         self.cvs.itemconfig(self._icon, text="■")
         self._rec_anim()
@@ -371,11 +391,9 @@ class VoiceGUI:
     def _rec_anim(self):
         if not self.recording:
             return
-        t   = self._tick
-        osc = 0.5 + 0.5 * math.sin(t * 0.32)
-        r   = int(BTN_R + osc * 4)
-        g   = int(65 + osc * 145)
-        self._set_btn(REC_RGB, radius=r, glow_alpha=g)
+        osc = 0.5 + 0.5 * math.sin(self._tick * 0.32)
+        self._set_btn(REC_RGB, radius=int(BTN_R + osc * 4),
+                      glow_alpha=int(65 + osc * 145))
         self._ring_phase = (self._ring_phase + 0.011) % 1.0
         self._draw_rings(REC_RGB, visible=True)
         self._draw_wave(active=True)
@@ -413,29 +431,28 @@ class VoiceGUI:
         self.recording = False
         self.root.after(0, self._stop_anim)
 
-    # ── Stop recording animation ───────────────────────────────────────────
+    # ── Stop animation ─────────────────────────────────────────────────────
     def _stop_anim(self, step=0):
         STEPS = 9
         if step >= STEPS:
             self._draw_rings(REC_RGB, visible=False)
-            for _, bid in [(b, b) for b, _ in self._bars]:
-                pass  # reset in _draw_wave below
             self._draw_wave(active=False)
             self.cvs.itemconfig(self._icon, text="…")
-            self._sv.set("işleniyor…")
+            self._sv.set(self._s('processing'))
             self._slbl.config(fg=TXT_DIM)
             self._transcribe()
             return
         t    = step / (STEPS - 1)
         ease = t * t * (3 - 2 * t)
-        r    = max(BTN_R - int(ease * 7), BTN_R - 7)
-        self._set_btn(_lerp(REC_RGB, BUSY_RGB, ease), radius=r, glow_alpha=0)
+        self._set_btn(_lerp(REC_RGB, BUSY_RGB, ease),
+                      radius=max(BTN_R - int(ease * 7), BTN_R - 7), glow_alpha=0)
         self._draw_wave(active=False)
         self.root.after(38, lambda: self._stop_anim(step + 1))
 
     # ── Transcribe ─────────────────────────────────────────────────────────
     def _transcribe(self):
         self._set_btn(BUSY_RGB)
+        self._sv.set(self._s('transcribing'))
         self._spin_start()
         threading.Thread(target=self._do_transcribe, daemon=True).start()
 
@@ -460,11 +477,11 @@ class VoiceGUI:
         if self._transcript:
             self._flash_ok()
             self._set_send(True)
-            self._sv.set("kopyalandı ✓")
+            self._sv.set(self._s('copied'))
             self._slbl.config(fg=TXT_OK)
         else:
             self._set_btn(IDLE_RGB)
-            self._sv.set("tıkla, konuş")
+            self._sv.set(self._s('ready'))
             self._slbl.config(fg=TXT_MID)
 
     # ── Success flash ──────────────────────────────────────────────────────
@@ -475,8 +492,7 @@ class VoiceGUI:
             return
         t   = (step % HALF) / (HALF - 1)
         rgb = _lerp(IDLE_RGB, OK_RGB, t) if step < HALF else _lerp(OK_RGB, IDLE_RGB, t)
-        g   = int(55 * math.sin(math.pi * step / TOTAL))
-        self._set_btn(rgb, glow_alpha=g)
+        self._set_btn(rgb, glow_alpha=int(55 * math.sin(math.pi * step / TOTAL)))
         self.root.after(75, lambda: self._flash_ok(step + 1))
 
     # ── Send button ────────────────────────────────────────────────────────
