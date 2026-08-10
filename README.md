@@ -1,5 +1,20 @@
 # 🎙️ Claude Turkish Voice | Claude Türkçe Ses
 
+> ## ⚠️ Arşivlendi — [canmenzo/Handy](https://github.com/canmenzo/Handy) kullanın
+>
+> Bu proje artık geliştirilmiyor. Yerine geçen **[Handy](https://github.com/canmenzo/Handy)**
+> daha iyi çalışıyor ve çok daha güzel bir arayüzü var — sistem genelinde çalışan
+> yerel konuşma-metin, sadece Claude Code içinde değil.
+>
+> ---
+>
+> ## ⚠️ Archived — use [canmenzo/Handy](https://github.com/canmenzo/Handy) instead
+>
+> This project is no longer maintained. Its replacement, **[Handy](https://github.com/canmenzo/Handy)**,
+> works better and has a much nicer UI — local speech-to-text system-wide, not just inside Claude Code.
+>
+> The code below is kept for reference.
+
 🇹🇷 [Türkçe](#türkçe) &nbsp;|&nbsp; 🇬🇧 [English](#english)
 
 ---
